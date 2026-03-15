@@ -5,7 +5,7 @@ import networkx as nx
 
 
 PLACE = "Boston, Massachusetts, USA"
-BUFFER_METERS = 500
+BUFFER_METERS = 0.5 * 1609.34
 OUTPUT_CSV = "transit_station_metrics.csv"
 
 
@@ -28,6 +28,30 @@ def get_station_name_columns(gdf):
             return col
     return None
 
+def classify_mbta_station(row):
+    railway = row.get("railway")
+    station = row.get("station")
+    highway = row.get("highway")
+
+    if highway == "bus_stop":
+        return pd.Series([False, "not_mbta_tod"])
+
+    if railway == "subway_entrance":
+        return pd.Series([False, "not_mbta_tod"])
+
+    if station == "subway":
+        return pd.Series([True, "rapid_transit"])
+
+    if station == "light_rail":
+        return pd.Series([True, "light_rail"])
+
+    if station == "train":
+        return pd.Series([True, "commuter_rail"])
+
+    if railway in ["station", "halt"]:
+        return pd.Series([True, "rail_station_unspecified"])
+
+    return pd.Series([False, "not_mbta_tod"])
 
 def download_data(place):
     print("Downloading walking network...")
@@ -104,6 +128,10 @@ def prepare_data(G, transit, buildings, schools, hospitals, parks):
 
     transit["station_name"] = transit["station_name"].fillna(
         "station_" + transit["station_id"].astype(str)
+    )
+
+    transit[["is_mbta_tod_station", "mbta_mode"]] = transit.apply(
+        classify_mbta_station, axis=1
     )
 
     return G_proj, transit, buildings, schools, hospitals, parks
@@ -221,46 +249,43 @@ def main():
 
     print("Counting buildings...")
     building_counts = count_features_in_buffers(
-        station_buffers, buildings, "buildings_500m"
+        station_buffers, buildings, "buildings"
     )
 
     print("Counting schools...")
     school_counts = count_features_in_buffers(
-        station_buffers, schools, "schools_500m"
+        station_buffers, schools, "schools"
     )
 
     print("Counting hospitals...")
     hospital_counts = count_features_in_buffers(
-        station_buffers, hospitals, "hospitals_500m"
+        station_buffers, hospitals, "hospitals"
     )
 
     print("Counting parks...")
     park_counts = count_features_in_buffers(
-        station_buffers, parks, "parks_500m"
+        station_buffers, parks, "parks"
     )
 
     avg_dist_df = compute_avg_walk_distance(
         G_proj, transit, buildings, station_buffers
     )
 
-    print("Merging final table...")
-    df = transit[["station_id", "station_name"]].copy()
+    df = transit[
+        ["station_id", "station_name", "is_mbta_tod_station", "mbta_mode"]
+    ].copy()
 
     for counts in [building_counts, school_counts, hospital_counts, park_counts, avg_dist_df]:
         df = df.merge(counts, on="station_id", how="left")
 
-    df["buildings_500m"] = df["buildings_500m"].fillna(0).astype(int)
-    df["schools_500m"] = df["schools_500m"].fillna(0).astype(int)
-    df["hospitals_500m"] = df["hospitals_500m"].fillna(0).astype(int)
-    df["parks_500m"] = df["parks_500m"].fillna(0).astype(int)
+    df["buildings"] = df["buildings"].fillna(0).astype(int)
+    df["schools"] = df["schools"].fillna(0).astype(int)
+    df["hospitals"] = df["hospitals"].fillna(0).astype(int)
+    df["parks"] = df["parks"].fillna(0).astype(int)
 
     df = df.sort_values("station_name").reset_index(drop=True)
 
-    print(f"Saving to {OUTPUT_CSV} ...")
     df.to_csv(OUTPUT_CSV, index=False)
-
-    print("\nDone. Preview:")
-    print(df.head(20))
 
 
 if __name__ == "__main__":
